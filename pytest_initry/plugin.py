@@ -163,6 +163,7 @@ class PytestInitry:
             self.pairs = []
 
     def pytest_runtest_logreport(self, report):
+
         if self.test_uuid is not None:
             if report.when == "call" and report.outcome == "failed":
                 if report.failed and not hasattr(report, "wasxfail"):
@@ -170,6 +171,9 @@ class PytestInitry:
                         uuid=self.test_uuid,
                         stopped_at=Timestamp(seconds=int(time.time())),
                         status=test_pb2.TestStatus.FAILED,
+                        log=report.longreprtext,
+                        stdout=report.capstdout,
+                        stderr=report.capstderr,
                     )
                     if not self.initry_batching:
                         self.test_grpc_client.call_rpc_method("StopTest", request)
@@ -181,6 +185,9 @@ class PytestInitry:
                         uuid=self.test_uuid,
                         stopped_at=Timestamp(seconds=int(time.time())),
                         status=test_pb2.TestStatus.FAILED,
+                        log=report.longreprtext,
+                        stdout=report.capstdout,
+                        stderr=report.capstderr,
                     )
                     if not self.initry_batching:
                         self.test_grpc_client.call_rpc_method("StopTest", request)
