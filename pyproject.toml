@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "pytest-initry"
-version = "0.1.1"
+version = "0.2.0"
 description = "Plugin for sending automation test data from Pytest to the initry"
 authors = ["Andrejs Smirnovs <and.inbx@gmail.com>"]
 readme = "README.md"
