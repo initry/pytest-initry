@@ -59,6 +59,17 @@ Use together with pytest argument `--junitxml=your_xml_file.name.xml`
 Example: True, False.
 <br><br>
 
+### Examples:
+
+`pytest`: Pytest will be executed in real-time mode.
+
+`pytest` *(with initry_batching=True)*: Pytest will be executed in real-time mode, but data will be sent to the server in batches to reduce network overhead. Real-time data will only display task finalized statuses without the 'running' state.
+
+`pytest --junitxml=test.xml`: Pytest will be executed in real-time mode, and additional information will be collected from the generated JUnit XML file after the test run finalization.
+
+`pytest --junitxml=test.xml` *(with initry_junit_xml_only=True)*:  Pytest will be executed without providing real-time data, and information will be gathered after the test run ends using the generated JUnit XML file.
+
+
 
 ### License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
