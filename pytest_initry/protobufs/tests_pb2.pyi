@@ -21,7 +21,9 @@ class Test(_message.Message):
     def __init__(self, nodeid: _Optional[str] = ..., location: _Optional[str] = ..., uuid: _Optional[str] = ..., test_run_uuid: _Optional[str] = ..., description: _Optional[str] = ...) -> None: ...
 
 class CreateTestsRequest(_message.Message):
-    __slots__ = ("tests",)
+    __slots__ = ("tests", "only_tests_info")
     TESTS_FIELD_NUMBER: _ClassVar[int]
+    ONLY_TESTS_INFO_FIELD_NUMBER: _ClassVar[int]
     tests: _containers.RepeatedCompositeFieldContainer[Test]
-    def __init__(self, tests: _Optional[_Iterable[_Union[Test, _Mapping]]] = ...) -> None: ...
+    only_tests_info: bool
+    def __init__(self, tests: _Optional[_Iterable[_Union[Test, _Mapping]]] = ..., only_tests_info: bool = ...) -> None: ...
