@@ -1,6 +1,6 @@
 import uuid
 import time
-
+import hashlib
 import pytest
 from _pytest.mark import deselect_by_keyword, deselect_by_mark
 import grpc
@@ -38,38 +38,29 @@ class GrpcClient:
                 return None
 
 
+def is_main_node(config):
+    return not hasattr(config, "workerinput")
+
+
 class PytestInitry:
     def __init__(self, config=None):
         self.config = config
         self.tests = list()
         self.xmlpath = config.option.xmlpath
-        self.test_run_uuid = str(uuid.uuid4())
         self.test_uuid = None
         self.pairs = []
         self.start_records = []
-        self.initry_batching_ini = config.getoption("initry_batching") or config.getini(
-            "initry_batching"
-        )
+        self.initry_batching_ini = config.getoption("initry_batching") or config.getini("initry_batching")
         self.initry_batching = self.initry_batching_ini
-        self.initry_host = config.getoption("initry_host") or config.getini(
-            "initry_host"
-        )
-        self.initry_port = config.getoption("initry_port") or config.getini(
-            "initry_port"
-        )
-        self.initry_grpc_port = config.getoption("initry_grpc_port") or config.getini(
-            "initry_grpc_port"
-        )
-        self.initry_junit_xml_only = config.getoption("initry_junit_xml_only") or config.getini(
-            "initry_junit_xml_only"
-        )
+        self.initry_host = config.getoption("initry_host") or config.getini("initry_host")
+        self.initry_port = config.getoption("initry_port") or config.getini("initry_port")
+        self.initry_grpc_port = config.getoption("initry_grpc_port") or config.getini("initry_grpc_port")
+        self.initry_junit_xml_only = config.getoption("initry_junit_xml_only") or config.getini("initry_junit_xml_only")
         self.test_run_grpc_client = GrpcClient(
             f"{self.initry_host}:{self.initry_grpc_port}",
             test_run_pb2_grpc.TestRunServiceStub,
         )
-        self.test_grpc_client = GrpcClient(
-            f"{self.initry_host}:{self.initry_grpc_port}", test_pb2_grpc.TestServiceStub
-        )
+        self.test_grpc_client = GrpcClient(f"{self.initry_host}:{self.initry_grpc_port}", test_pb2_grpc.TestServiceStub)
         self.cs_test_grpc_client = GrpcClient(
             f"{self.initry_host}:{self.initry_grpc_port}",
             test_pb2_grpc.ClientStreamTestServiceStub,
@@ -81,38 +72,54 @@ class PytestInitry:
 
     def nodeid_converter(self, nodeid):
         """
-         Convert a nodeid string into a standardized format.
+        Convert a nodeid string into a standardized format.
 
-         Parameters:
-             nodeid (str): The original nodeid string to be converted.
+        Parameters:
+            nodeid (str): The original nodeid string to be converted.
 
-         Returns:
-             str: The converted nodeid string with '/' replaced by '.' and '::' replaced by '.'.
-                  Additionally, '.py' extension is removed.
+        Returns:
+            str: The converted nodeid string with '/' replaced by '.' and '::' replaced by '.'.
+                 Additionally, '.py' extension is removed.
 
-         Example:
-             >>> self.nodeid_converter("tests/classes/test_1.py::TestClass::test_one")
-             'tests.classes.test_1.TestClass.test_one'
-         """
-        return nodeid.replace('/', '.').replace('::', '.').replace('.py', '')
+        Example:
+            >>> self.nodeid_converter("tests/classes/test_1.py::TestClass::test_one")
+            'tests.classes.test_1.TestClass.test_one'
+        """
+        return nodeid.replace("/", ".").replace("::", ".").replace(".py", "")
 
-    def append_test(self, item):
+    def generate_test_id(self, shared_uuid, data):
+        string = (shared_uuid + data).encode("utf-8")
+        number_str = str(int(hashlib.md5(string).hexdigest(), 16))[0:31]
+        number = int(number_str)
+        hex_number = hex(number)[2:]
+        hex_number_padded = hex_number.zfill(32)
+        return str(uuid.UUID(hex=hex_number_padded))
+
+    def append_test(self, item, shared_uuid):
         test = dict()
         test["location"] = item.location[2]
         test["nodeid"] = self.nodeid_converter(item.nodeid)
-        test["uuid"] = str(uuid.uuid4())
-        test["test_run_uuid"] = self.test_run_uuid
+        if shared_uuid:
+            test["uuid"] = self.generate_test_id(shared_uuid, item.nodeid)
+        else:
+            test["uuid"] = str(uuid.uuid4())
+        test["test_run_uuid"] = shared_uuid
         test["description"] = item._obj.__doc__
         self.tests.append(test)
 
     def pytest_collection_modifyitems(self, session, items, config):
+        if not is_main_node(config):
+            shared_uuid = session.config.workerinput["shared_uuid"]
+        else:
+            shared_uuid = session.config.shared_uuid
+
         started_at = Timestamp(seconds=int(time.time()))
 
         deselect_by_keyword(items, config)
         deselect_by_mark(items, config)
 
         for item in session.items:
-            self.append_test(item)
+            self.append_test(item, shared_uuid)
 
         if self.initry_junit_xml_only is False:
             plugin_type = "pytest.initry"
@@ -122,12 +129,12 @@ class PytestInitry:
             request_data = test_run_pb2.CreateTestRunRequest(
                 tests_count=len(session.items),
                 started_at=started_at,
-                uuid=self.test_run_uuid,
+                uuid=shared_uuid,
                 plugin_type=plugin_type,
             )
         else:
             request_data = test_run_pb2.CreateTestRunRequest(
-                uuid=self.test_run_uuid,
+                uuid=shared_uuid,
                 started_at=started_at,
                 plugin_type="pytest.xml",
             )
@@ -158,22 +165,15 @@ class PytestInitry:
 
     def started_finished_pairs(self):
         if self.initry_junit_xml_only is False:
+
             def find_something(uuid: str):
-                _started_at = [
-                    req.started_at
-                    for req in self.pairs
-                    if req.uuid == uuid and hasattr(req, "started_at")
-                ][0]
-                _stopped_at = [
-                    req.stopped_at
-                    for req in self.pairs
-                    if req.uuid == uuid and hasattr(req, "stopped_at")
-                ][0]
-                _status = [
-                    req.status
-                    for req in self.pairs
-                    if req.uuid == uuid and hasattr(req, "stopped_at")
-                ][0]
+                _started_at = [req.started_at for req in self.pairs if req.uuid == uuid and hasattr(req, "started_at")][
+                    0
+                ]
+                _stopped_at = [req.stopped_at for req in self.pairs if req.uuid == uuid and hasattr(req, "stopped_at")][
+                    0
+                ]
+                _status = [req.status for req in self.pairs if req.uuid == uuid and hasattr(req, "stopped_at")][0]
                 return _started_at, _stopped_at, _status
 
             request = None
@@ -189,22 +189,16 @@ class PytestInitry:
 
     def create_pairs_for_batching(self, request):
         if self.initry_junit_xml_only is False:
-            start_record = [
-                record for record in self.start_records if record.uuid == self.test_uuid
-            ][0]
+            start_record = [record for record in self.start_records if record.uuid == self.test_uuid][0]
             if start_record:
                 # send start and stop to self.pairs
                 self.pairs.append(start_record)
                 self.pairs.append(request)
 
                 # clean start_records for previous start_record
-                self.start_records = [
-                    record for record in self.start_records if record.uuid != self.test_uuid
-                ]
+                self.start_records = [record for record in self.start_records if record.uuid != self.test_uuid]
 
-                self.cs_test_grpc_client.call_rpc_method(
-                    "ModifyTest", self.started_finished_pairs()
-                )
+                self.cs_test_grpc_client.call_rpc_method("ModifyTest", self.started_finished_pairs())
                 self.pairs = []
 
     def pytest_runtest_logreport(self, report):
@@ -283,19 +277,22 @@ class PytestInitry:
                         self.create_pairs_for_batching(request)
 
     def pytest_sessionfinish(self, session):
+        if not is_main_node(session.config):
+            shared_uuid = session.config.workerinput["shared_uuid"]
+        else:
+            shared_uuid = session.config.shared_uuid
+
         if self.xmlpath:
             timeout = httpx.Timeout(None, read=180.0)
-            files = {'file': open(self.config.option.xmlpath, 'rb')}
+            files = {"file": open(self.config.option.xmlpath, "rb")}
             with httpx.Client(timeout=timeout) as client:
                 if self.initry_junit_xml_only:
-                    data = {"uuid": self.test_run_uuid, "mode": "xml_only"}
+                    data = {"uuid": shared_uuid, "mode": "xml_only"}
                 else:
-                    data = {"uuid": self.test_run_uuid, "mode": "store"}
-                url = f'http://{self.initry_host}:{self.initry_port}/api/test-runs/xml'
+                    data = {"uuid": shared_uuid, "mode": "store"}
+                url = f"http://{self.initry_host}:{self.initry_port}/api/test-runs/xml"
                 client.post(url, files=files, data=data)
-        request_data = test_run_pb2.StopTestRunRequest(
-                uuid=self.test_run_uuid, stopped_at=Timestamp(seconds=int(time.time()))
-            )
+        request_data = test_run_pb2.StopTestRunRequest(uuid=shared_uuid, stopped_at=Timestamp(seconds=int(time.time())))
         self.test_run_grpc_client.call_rpc_method("StopTestRun", request_data)
 
 
@@ -340,10 +337,17 @@ def pytest_addoption(parser):
     parser.addini("initry_port", help="initry port", default=None)
     parser.addini("initry_grpc_port", help="initry gRPC port", default=None)
     parser.addini("initry_batching", type="bool", help="batch mode", default=None)
-    parser.addini("initry_junit_xml_only", type="bool", help="No realtime, only use JUnit XML report as source data", default=False)
+    parser.addini(
+        "initry_junit_xml_only",
+        type="bool",
+        help="No realtime, only use JUnit XML report as source data",
+        default=False,
+    )
 
 
 def pytest_configure(config):
+    if is_main_node(config):
+        config.shared_uuid = str(uuid.uuid4())
     initry = config.getoption("initry_host") or config.getini("initry_host")
     if initry:
         plugin = PytestInitry(config)
@@ -360,7 +364,12 @@ def pytest_configure(config):
     if junit_xml_only is True and batching is True:
         raise pytest.UsageError(
             "'initry_batching' config option must not be used together with 'initry_junit_xml_only'. "
-            "There is no point in doing so because the 'initry_junit_xml_only' mode does not utilize real-time reporting.")
+            "There is no point in doing so because the 'initry_junit_xml_only' mode does not utilize real-time reporting."
+        )
+
+
+def pytest_configure_node(node):
+    node.workerinput["shared_uuid"] = node.config.shared_uuid
 
 
 def pytest_unconfigure(config):
