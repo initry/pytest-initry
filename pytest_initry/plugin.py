@@ -163,7 +163,7 @@ class PytestInitry:
                 else:
                     self.test_grpc_client.call_rpc_method("StartTest", request_data)
 
-    def started_finished_pairs(self):
+    def started_finished_pairs(self, report):
         if self.initry_junit_xml_only is False:
 
             def find_something(uuid: str):
@@ -184,10 +184,13 @@ class PytestInitry:
                     started_at=started_at,
                     stopped_at=stopped_at,
                     status=status,
+                    log=report.longreprtext,
+                    stdout=report.capstdout,
+                    stderr=report.capstderr,
                 )
             yield request
 
-    def create_pairs_for_batching(self, request):
+    def create_pairs_for_batching(self, request, report):
         if self.initry_junit_xml_only is False:
             start_record = [record for record in self.start_records if record.uuid == self.test_uuid][0]
             if start_record:
@@ -198,7 +201,7 @@ class PytestInitry:
                 # clean start_records for previous start_record
                 self.start_records = [record for record in self.start_records if record.uuid != self.test_uuid]
 
-                self.cs_test_grpc_client.call_rpc_method("ModifyTest", self.started_finished_pairs())
+                self.cs_test_grpc_client.call_rpc_method("ModifyTest", self.started_finished_pairs(report))
                 self.pairs = []
 
     def pytest_runtest_logreport(self, report):
@@ -217,7 +220,7 @@ class PytestInitry:
                         if not self.initry_batching:
                             self.test_grpc_client.call_rpc_method("StopTest", request)
                         else:
-                            self.create_pairs_for_batching(request)
+                            self.create_pairs_for_batching(request, report)
                 elif report.when == "setup" and report.outcome == "failed":
                     if report.failed and not hasattr(report, "wasxfail"):
                         request = test_pb2.StopTestRequest(
@@ -231,7 +234,7 @@ class PytestInitry:
                         if not self.initry_batching:
                             self.test_grpc_client.call_rpc_method("StopTest", request)
                         else:
-                            self.create_pairs_for_batching(request)
+                            self.create_pairs_for_batching(request, report)
                 elif report.when == "call" and report.outcome == "passed":
                     request = test_pb2.StopTestRequest(
                         uuid=self.test_uuid,
@@ -241,7 +244,7 @@ class PytestInitry:
                     if not self.initry_batching:
                         self.test_grpc_client.call_rpc_method("StopTest", request)
                     else:
-                        self.create_pairs_for_batching(request)
+                        self.create_pairs_for_batching(request, report)
 
                 elif (report.when == "call" and report.outcome == "skipped") or (
                     report.when == "setup" and report.outcome == "skipped"
@@ -250,21 +253,27 @@ class PytestInitry:
                         uuid=self.test_uuid,
                         stopped_at=Timestamp(seconds=int(time.time())),
                         status=test_pb2.TestStatus.SKIPPED,
+                        log=report.longreprtext,
+                        stdout=report.capstdout,
+                        stderr=report.capstderr,
                     )
                     if not self.initry_batching:
                         self.test_grpc_client.call_rpc_method("StopTest", request)
                     else:
-                        self.create_pairs_for_batching(request)
+                        self.create_pairs_for_batching(request, report)
                 elif report.when == "call" and report.outcome == "xfailed":
                     request = test_pb2.StopTestRequest(
                         uuid=self.test_uuid,
                         stopped_at=Timestamp(seconds=int(time.time())),
                         status=test_pb2.TestStatus.EXPECTED_FAILED,
+                        log=report.longreprtext,
+                        stdout=report.capstdout,
+                        stderr=report.capstderr,
                     )
                     if not self.initry_batching:
                         self.test_grpc_client.call_rpc_method("StopTest", request)
                     else:
-                        self.create_pairs_for_batching(request)
+                        self.create_pairs_for_batching(request, report)
                 elif report.when == "call" and report.outcome == "xpassed":
                     request = test_pb2.StopTestRequest(
                         uuid=self.test_uuid,
@@ -274,7 +283,7 @@ class PytestInitry:
                     if not self.initry_batching:
                         self.test_grpc_client.call_rpc_method("StopTest", request)
                     else:
-                        self.create_pairs_for_batching(request)
+                        self.create_pairs_for_batching(request, report)
 
     def pytest_sessionfinish(self, session):
         if not is_main_node(session.config):
@@ -283,9 +292,8 @@ class PytestInitry:
             shared_uuid = session.config.shared_uuid
 
         if self.xmlpath:
-            timeout = httpx.Timeout(None, read=180.0)
             files = {"file": open(self.config.option.xmlpath, "rb")}
-            with httpx.Client(timeout=timeout) as client:
+            with httpx.Client(timeout=360) as client:
                 if self.initry_junit_xml_only:
                     data = {"uuid": shared_uuid, "mode": "xml_only"}
                 else:
